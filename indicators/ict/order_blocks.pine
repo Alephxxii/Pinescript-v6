@@ -1,0 +1,86 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0
+// © Alephxxii
+
+//@version=6
+indicator("ICT Order Blocks", shorttitle="ICT OB", overlay=true, max_boxes_count=500)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INPUTS
+// ─────────────────────────────────────────────────────────────────────────────
+var string GRP_BULL = "Bullish Order Block"
+var string GRP_BEAR = "Bearish Order Block"
+var string GRP_FILTER = "Filter"
+
+showBullOB   = input.bool(true,  "Show Bullish OB",  group = GRP_BULL)
+bullColor    = input.color(color.new(color.teal,  75), "Color", group = GRP_BULL)
+showBearOB   = input.bool(true,  "Show Bearish OB",  group = GRP_BEAR)
+bearColor    = input.color(color.new(color.orange, 75), "Color", group = GRP_BEAR)
+impulseMultiplier = input.float(1.5, "Min impulse size (ATR multiplier)", minval = 0.1, step = 0.1, group = GRP_FILTER)
+maxOBs       = input.int(10, "Max OBs to display", minval = 1, maxval = 500, group = GRP_FILTER)
+mitigateOnClose = input.bool(true, "Remove OB when mitigated (price closes inside)", group = GRP_FILTER)
+extendBars   = input.int(50, "Extend boxes N bars to the right", minval = 1, maxval = 500, group = GRP_FILTER)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LOGIC — Order Block detection
+//
+// A Bullish OB is the last BEARISH candle before a bullish impulse move.
+// A Bearish OB is the last BULLISH candle before a bearish impulse move.
+//
+// Impulse move = body of the displacement candle > ATR * multiplier
+// ─────────────────────────────────────────────────────────────────────────────
+atrValue = ta.atr(14)
+
+// Displacement detection (current bar)
+bullImpulse = (close - open) > (impulseMultiplier * atrValue) and close > high[1]
+bearImpulse = (open - close) > (impulseMultiplier * atrValue) and close < low[1]
+
+// Arrays to hold active OB boxes
+var box[] bullOBBoxes = array.new_box()
+var box[] bearOBBoxes = array.new_box()
+
+pruneOldest(box[] boxes) =>
+    if array.size(boxes) > maxOBs
+        box.delete(array.shift(boxes))
+
+pruneMitigated(box[] boxes, bool isBull) =>
+    int i = 0
+    while i < array.size(boxes)
+        box b      = array.get(boxes, i)
+        float top  = box.get_top(b)
+        float btm  = box.get_bottom(b)
+        bool hit   = isBull ? close < btm : close > top
+        if mitigateOnClose and hit
+            box.delete(b)
+            array.remove(boxes, i)
+        else
+            i += 1
+
+if barstate.isconfirmed
+    pruneMitigated(bullOBBoxes, true)
+    pruneMitigated(bearOBBoxes, false)
+
+    // Bullish OB: previous candle[1] must be bearish, current bar is bullish impulse
+    if showBullOB and bullImpulse and open[1] > close[1]
+        pruneOldest(bullOBBoxes)
+        b = box.new(bar_index[1], open[1], bar_index + extendBars, close[1],
+             border_color = color.new(color.teal, 40),
+             bgcolor       = bullColor,
+             border_width  = 1,
+             extend        = extend.right)
+        array.push(bullOBBoxes, b)
+
+    // Bearish OB: previous candle[1] must be bullish, current bar is bearish impulse
+    if showBearOB and bearImpulse and close[1] > open[1]
+        pruneOldest(bearOBBoxes)
+        b = box.new(bar_index[1], close[1], bar_index + extendBars, open[1],
+             border_color = color.new(color.orange, 40),
+             bgcolor       = bearColor,
+             border_width  = 1,
+             extend        = extend.right)
+        array.push(bearOBBoxes, b)
+
+// Labels on most recent bars for clarity
+plotshape(bullImpulse and barstate.isconfirmed and showBullOB, title="Bullish impulse", 
+     style=shape.triangleup, location=location.belowbar, color=color.teal,  size=size.tiny)
+plotshape(bearImpulse and barstate.isconfirmed and showBearOB, title="Bearish impulse", 
+     style=shape.triangledown, location=location.abovebar, color=color.orange, size=size.tiny)

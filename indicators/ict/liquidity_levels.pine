@@ -1,0 +1,100 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0
+// © Alephxxii
+
+//@version=6
+indicator("ICT Liquidity Levels — BSL & SSL", shorttitle="ICT LQD", overlay=true, max_lines_count=500)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INPUTS
+// ─────────────────────────────────────────────────────────────────────────────
+var string GRP_BSL = "Buy Side Liquidity (BSL) — Equal Highs / Swing Highs"
+var string GRP_SSL = "Sell Side Liquidity (SSL) — Equal Lows  / Swing Lows"
+var string GRP_OPT = "Options"
+
+showBSL     = input.bool(true, "Show BSL levels", group = GRP_BSL)
+bslColor    = input.color(color.new(color.red, 20),   "BSL color", group = GRP_BSL)
+showSSL     = input.bool(true, "Show SSL levels", group = GRP_SSL)
+sslColor    = input.color(color.new(color.green, 20), "SSL color", group = GRP_SSL)
+pivotLen    = input.int(10,  "Pivot detection length", minval = 2, group = GRP_OPT)
+equalThresh = input.float(0.05, "Equal level threshold (%)", minval = 0.01, step = 0.01, group = GRP_OPT,
+             tooltip = "Two levels are considered 'equal' when within this % of each other")
+maxLevels   = input.int(20, "Max liquidity levels", minval = 1, maxval = 500, group = GRP_OPT)
+removeSwept = input.bool(true, "Remove level when swept (price closes beyond it)", group = GRP_OPT)
+extendBars  = input.int(50, "Extend lines N bars to the right", minval = 1, maxval = 500, group = GRP_OPT)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PIVOT DETECTION
+// ─────────────────────────────────────────────────────────────────────────────
+ph = ta.pivothigh(high, pivotLen, pivotLen)
+pl = ta.pivotlow(low,  pivotLen, pivotLen)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STATE — arrays of active liquidity lines
+// ─────────────────────────────────────────────────────────────────────────────
+var line[] bslLines = array.new_line()
+var line[] sslLines = array.new_line()
+
+// Remove oldest line when exceeding max
+pruneOldest(line[] lines) =>
+    if array.size(lines) > maxLevels
+        line.delete(array.shift(lines))
+
+// Remove lines that have been swept (price closed beyond them)
+pruneSwept(line[] lines, bool isBSL) =>
+    int i = 0
+    while i < array.size(lines)
+        l     = array.get(lines, i)
+        float y = line.get_y1(l)
+        bool swept = isBSL ? close > y : close < y
+        if removeSwept and swept
+            line.delete(l)
+            array.remove(lines, i)
+        else
+            i += 1
+
+// Check if a new level is too close (equal) to an existing level
+isDuplicate(line[] lines, float price) =>
+    bool dup = false
+    for l in lines
+        float y = line.get_y1(l)
+        if math.abs(price - y) / y * 100 <= equalThresh
+            dup := true
+            break
+    dup
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DRAWING
+// ─────────────────────────────────────────────────────────────────────────────
+if barstate.isconfirmed
+    pruneSwept(bslLines, true)
+    pruneSwept(sslLines, false)
+
+    // BSL — swing high / equal high
+    if showBSL and not na(ph)
+        pivotBar = bar_index - pivotLen
+        if not isDuplicate(bslLines, ph)
+            pruneOldest(bslLines)
+            l = line.new(pivotBar, ph, bar_index + extendBars, ph,
+                 color  = bslColor,
+                 width  = 1,
+                 style  = line.style_dotted,
+                 extend = extend.right)
+            array.push(bslLines, l)
+            label.new(pivotBar, ph, "BSL",
+                 style = label.style_none, textcolor = bslColor, size = size.tiny,
+                 xloc  = xloc.bar_index, yloc = yloc.price)
+
+    // SSL — swing low / equal low
+    if showSSL and not na(pl)
+        pivotBar = bar_index - pivotLen
+        if not isDuplicate(sslLines, pl)
+            pruneOldest(sslLines)
+            l = line.new(pivotBar, pl, bar_index + extendBars, pl,
+                 color  = sslColor,
+                 width  = 1,
+                 style  = line.style_dotted,
+                 extend = extend.right)
+            array.push(sslLines, l)
+            label.new(pivotBar, pl, "SSL",
+                 style = label.style_none, textcolor = sslColor, size = size.tiny,
+                 xloc  = xloc.bar_index, yloc = yloc.price)

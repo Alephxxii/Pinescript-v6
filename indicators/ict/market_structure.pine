@@ -1,0 +1,83 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0
+// © Alephxxii
+
+//@version=6
+indicator("ICT Market Structure — BOS & CHoCH", shorttitle="ICT MS", overlay=true)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INPUTS
+// ─────────────────────────────────────────────────────────────────────────────
+var string GRP_STRUCT  = "Structure"
+var string GRP_DISPLAY = "Display"
+
+length        = input.int(10,   "Pivot length (left/right bars)", minval = 1, group = GRP_STRUCT)
+showBOS       = input.bool(true, "Show BOS  (Break of Structure)",      group = GRP_DISPLAY)
+showCHoCH     = input.bool(true, "Show CHoCH (Change of Character)",    group = GRP_DISPLAY)
+bosColor      = input.color(color.blue,   "BOS color",   group = GRP_DISPLAY)
+chochColor    = input.color(color.purple, "CHoCH color", group = GRP_DISPLAY)
+lineWidth     = input.int(1, "Line width", minval = 1, maxval = 4, group = GRP_DISPLAY)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PIVOT DETECTION
+// ─────────────────────────────────────────────────────────────────────────────
+pivotHigh = ta.pivothigh(high, length, length)
+pivotLow  = ta.pivotlow(low,  length, length)
+
+// Track last confirmed swing high and swing low
+var float lastSwingHigh     = na
+var int   lastSwingHighBar  = na
+var float lastSwingLow      = na
+var int   lastSwingLowBar   = na
+
+// Track market bias: true = bullish (higher highs / higher lows)
+var bool  bullBias = true
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STRUCTURE LABELING
+// ─────────────────────────────────────────────────────────────────────────────
+// BOS  (Break of Structure) — continuation: price breaks the last swing in the direction of the trend
+// CHoCH (Change of Character) — reversal: price breaks the last swing AGAINST the current trend
+
+drawLine(int x1, float y1, int x2, float y2, color c, string txt) =>
+    line.new(x1, y1, x2, y2,
+         color = c, width = lineWidth, style = line.style_dashed)
+    label.new(math.round((x1 + x2) / 2), y1, txt,
+         style       = label.style_none,
+         textcolor   = c,
+         size        = size.small)
+
+if not na(pivotHigh)
+    phBar = bar_index - length
+    if bullBias
+        // Bullish trend: new higher high → BOS (continuation)
+        if pivotHigh > lastSwingHigh and not na(lastSwingHigh)
+            if showBOS
+                drawLine(lastSwingHighBar, lastSwingHigh, phBar, lastSwingHigh, bosColor, "BOS")
+        else if pivotHigh < lastSwingHigh and not na(lastSwingHigh)
+            // Lower high in a bullish trend → potential CHoCH
+            if showCHoCH
+                drawLine(lastSwingHighBar, lastSwingHigh, phBar, lastSwingHigh, chochColor, "CHoCH")
+            bullBias := false
+    lastSwingHigh    := pivotHigh
+    lastSwingHighBar := phBar
+
+if not na(pivotLow)
+    plBar = bar_index - length
+    if not bullBias
+        // Bearish trend: new lower low → BOS (continuation)
+        if pivotLow < lastSwingLow and not na(lastSwingLow)
+            if showBOS
+                drawLine(lastSwingLowBar, lastSwingLow, plBar, lastSwingLow, bosColor, "BOS")
+        else if pivotLow > lastSwingLow and not na(lastSwingLow)
+            // Higher low in a bearish trend → potential CHoCH
+            if showCHoCH
+                drawLine(lastSwingLowBar, lastSwingLow, plBar, lastSwingLow, chochColor, "CHoCH")
+            bullBias := true
+    lastSwingLow    := pivotLow
+    lastSwingLowBar := plBar
+
+// Visual pivot markers
+plotshape(not na(pivotHigh), title="Swing High", style=shape.circle,
+     location=location.abovebar, offset=-length, color=color.new(color.red, 30),   size=size.tiny)
+plotshape(not na(pivotLow),  title="Swing Low",  style=shape.circle,
+     location=location.belowbar, offset=-length, color=color.new(color.green, 30), size=size.tiny)

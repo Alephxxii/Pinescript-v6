@@ -1,0 +1,77 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0
+// © Alephxxii
+
+//@version=6
+indicator("ICT Fair Value Gap", shorttitle="ICT FVG", overlay=true, max_boxes_count=500)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INPUTS
+// ─────────────────────────────────────────────────────────────────────────────
+var string GRP_BULL = "Bullish FVG"
+var string GRP_BEAR = "Bearish FVG"
+var string GRP_DISPLAY = "Display"
+
+showBullFVG   = input.bool(true,  "Show Bullish FVG",  group = GRP_BULL)
+bullColor     = input.color(color.new(color.green, 80), "Color",  group = GRP_BULL)
+showBearFVG   = input.bool(true,  "Show Bearish FVG",  group = GRP_BEAR)
+bearColor     = input.color(color.new(color.red,   80), "Color",  group = GRP_BEAR)
+mitigateOnClose = input.bool(true, "Mitigate on close (remove FVG when price fills it)", group = GRP_DISPLAY)
+maxFVGs       = input.int(20, "Max FVGs to display", minval = 1, maxval = 500, group = GRP_DISPLAY)
+extendBars    = input.int(50, "Extend boxes N bars to the right", minval = 1, maxval = 500, group = GRP_DISPLAY)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LOGIC — Fair Value Gap detection
+//
+//  Bullish FVG:  low[0] > high[2]   (gap between candle[2].high and candle[0].low)
+//  Bearish FVG:  high[0] < low[2]   (gap between candle[2].low  and candle[0].high)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Arrays to track active FVG boxes
+var box[] bullBoxes = array.new_box()
+var box[] bearBoxes = array.new_box()
+
+// Helper — remove boxes that have been mitigated
+pruneMitigated(box[] boxes, bool isBull) =>
+    int i = 0
+    while i < array.size(boxes)
+        box b = array.get(boxes, i)
+        float top    = box.get_top(b)
+        float bottom = box.get_bottom(b)
+        bool mitigated = isBull ? close <= bottom : close >= top
+        if mitigateOnClose and mitigated
+            box.delete(b)
+            array.remove(boxes, i)
+        else
+            i += 1
+
+// Remove oldest box when exceeding max count
+pruneOldest(box[] boxes) =>
+    if array.size(boxes) > maxFVGs
+        box.delete(array.shift(boxes))
+
+if barstate.isconfirmed
+    // Check Bullish FVG: gap = [high[2], low[0]]
+    if showBullFVG and low > high[2]
+        pruneMitigated(bullBoxes, true)
+        pruneOldest(bullBoxes)
+        b = box.new(bar_index[2], high[2], bar_index + extendBars, low,
+             border_color = color.new(color.green, 60),
+             bgcolor       = bullColor,
+             border_width  = 1,
+             extend        = extend.right)
+        array.push(bullBoxes, b)
+
+    // Check Bearish FVG: gap = [low[2], high[0]]
+    if showBearFVG and high < low[2]
+        pruneMitigated(bearBoxes, false)
+        pruneOldest(bearBoxes)
+        b = box.new(bar_index[2], low[2], bar_index + extendBars, high,
+             border_color = color.new(color.red, 60),
+             bgcolor       = bearColor,
+             border_width  = 1,
+             extend        = extend.right)
+        array.push(bearBoxes, b)
+    
+    // Prune mitigated on every confirmed bar even without a new FVG
+    pruneMitigated(bullBoxes, true)
+    pruneMitigated(bearBoxes, false)
