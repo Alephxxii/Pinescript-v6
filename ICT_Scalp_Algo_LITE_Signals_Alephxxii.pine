@@ -1,0 +1,15 @@
+//@version=6
+indicator("ICT_Scalp_Algo_LITE_Signals, by Alephxxii", overlay=true, max_lines_count=500, max_boxes_count=500, max_labels_count=500, max_bars_back=5000)
+
+//------------------------------------------------------------------------------
+// Inputs
+//------------------------------------------------------------------------------
+string G1 = "1) Core Engine"
+int  i_sweepBreakTicks = input.int(5, "Sweep: ticks min beyond swing", minval=0, maxval=50, group=G1)
+bool i_drawSweepLine   = input.bool(true, "Draw swept swing line", group=G1)
+int  i_maxSweepLines   = input.int(100, "Max sweep lines", minval=1, maxval=300, group=G1)
+bool i_fastRealtime    = input.bool(true, "Fast realtime updates (intrabar)", group=G1)
+bool i_perfSkipLiqWhenOff = input.bool(true, "Perf: skip 5m liquidity engine when off", group=G1)
+
+string G2 = "2) Trade Model"
+float i_rr             = input.float(0.8, "RR target", minval=0.1, step=0.1, group=G2)
