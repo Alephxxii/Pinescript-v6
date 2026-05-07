@@ -1,0 +1,146 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0
+// © Alephxxii
+
+//@version=6
+strategy("ICT Optimal Trade Entry (OTE) Strategy", shorttitle="ICT OTE",
+     overlay            = true,
+     initial_capital    = 10000,
+     default_qty_type   = strategy.percent_of_equity,
+     default_qty_value  = 5,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0.01)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DESCRIPTION
+// The Optimal Trade Entry (OTE) is a retracement entry model based on
+// Fibonacci levels (61.8% – 79%) after a confirmed displacement/swing.
+//
+// Entry logic:
+//   1. Identify a significant swing high and swing low.
+//   2. After a bullish displacement (break of a swing high), wait for price
+//      to retrace to the 61.8%–79% Fibonacci zone.
+//   3. Enter long when price closes back above 61.8%.
+//   4. Stop below the swing low; Target at 100% extension or beyond.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INPUTS
+// ─────────────────────────────────────────────────────────────────────────────
+var string GRP_PIVOT = "Swing / Pivot Settings"
+var string GRP_OTE   = "OTE Fibonacci Levels"
+var string GRP_RISK  = "Risk Management"
+var string GRP_FILT  = "Filters"
+
+pivotLen   = input.int(10,   "Pivot detection length", minval = 2, group = GRP_PIVOT)
+
+oteHigh    = input.float(79.0, "OTE upper bound (%)", minval = 50.0, maxval = 99.9, step = 0.1,
+             group = GRP_OTE, tooltip = "Typically 78.6% in ICT methodology")
+oteLow     = input.float(61.8, "OTE lower bound (%)", minval = 10.0, maxval = 90.0, step = 0.1,
+             group = GRP_OTE, tooltip = "Typically 61.8% (golden ratio)")
+oteColor   = input.color(color.new(color.blue, 80), "OTE zone color", group = GRP_OTE)
+
+rrRatio    = input.float(2.0, "Risk:Reward ratio", minval = 0.5, step = 0.5, group = GRP_RISK)
+slBuffer   = input.float(0.1, "Stop Loss buffer beyond OTE zone (%)", minval = 0.01, step = 0.05, group = GRP_RISK)
+
+trendFilt  = input.bool(true,  "Enable EMA trend filter", group = GRP_FILT)
+emaLen     = input.int(50, "EMA length", minval = 5, group = GRP_FILT)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PIVOT DETECTION
+// ─────────────────────────────────────────────────────────────────────────────
+ph = ta.pivothigh(high, pivotLen, pivotLen)
+pl = ta.pivotlow(low,  pivotLen, pivotLen)
+
+var float lastPH    = na
+var int   lastPHBar = na
+var float lastPL    = na
+var int   lastPLBar = na
+
+if not na(ph)
+    lastPH    := ph
+    lastPHBar := bar_index - pivotLen
+
+if not na(pl)
+    lastPL    := pl
+    lastPLBar := bar_index - pivotLen
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OTE ZONE CALCULATION
+// Bullish OTE: retracement of swing low → swing high
+//   Top    = swingHigh - range * (oteLow / 100)
+//   Bottom = swingHigh - range * (oteHigh / 100)
+// ─────────────────────────────────────────────────────────────────────────────
+ema = ta.ema(close, emaLen)
+plot(trendFilt ? ema : na, "EMA", color = color.new(color.yellow, 40), linewidth = 1)
+
+// We need a swing high AND swing low, with the swing low coming first (bullish OTE)
+var float bullOTETop = na
+var float bullOTEBot = na
+var float bearOTETop = na
+var float bearOTEBot = na
+
+var bool  bullOTEActive = false
+var bool  bearOTEActive = false
+
+// After a new swing high (displacement up), set bullish OTE zone
+if not na(ph) and not na(lastPL) and lastPLBar < lastPHBar
+    range_ = lastPH - lastPL
+    bullOTETop    := lastPH - range_ * (oteLow  / 100)
+    bullOTEBot    := lastPH - range_ * (oteHigh / 100)
+    bullOTEActive := true
+
+// After a new swing low (displacement down), set bearish OTE zone
+if not na(pl) and not na(lastPH) and lastPHBar < lastPLBar
+    range_ = lastPH - lastPL
+    bearOTETop    := lastPL + range_ * (oteHigh / 100)
+    bearOTEBot    := lastPL + range_ * (oteLow  / 100)
+    bearOTEActive := true
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENTRY CONDITIONS
+// ─────────────────────────────────────────────────────────────────────────────
+// Long: price inside bullish OTE zone and reclaims the upper bound (61.8%)
+longEntry  = bullOTEActive
+          and close >= bullOTEBot
+          and close <= bullOTETop
+          and (not trendFilt or close > ema)
+          and strategy.position_size == 0
+
+// Short: price inside bearish OTE zone and reclaims the lower bound (61.8%)
+shortEntry = bearOTEActive
+          and close >= bearOTEBot
+          and close <= bearOTETop
+          and (not trendFilt or close < ema)
+          and strategy.position_size == 0
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EXECUTION
+// ─────────────────────────────────────────────────────────────────────────────
+if longEntry
+    slPrice = bullOTEBot * (1 - slBuffer / 100)
+    tpPrice = close + (close - slPrice) * rrRatio
+    strategy.entry("OTE Long", strategy.long)
+    strategy.exit("OTE Long Exit", "OTE Long", stop = slPrice, limit = tpPrice)
+    bullOTEActive := false
+
+if shortEntry
+    slPrice = bearOTETop * (1 + slBuffer / 100)
+    tpPrice = close - (slPrice - close) * rrRatio
+    strategy.entry("OTE Short", strategy.short)
+    strategy.exit("OTE Short Exit", "OTE Short", stop = slPrice, limit = tpPrice)
+    bearOTEActive := false
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DRAW ACTIVE OTE ZONES
+// ─────────────────────────────────────────────────────────────────────────────
+// Using fill between two plots for the zone visual
+bullOTETopPlot = plot(bullOTEActive ? bullOTETop : na, "Bull OTE Top", color = na)
+bullOTEBotPlot = plot(bullOTEActive ? bullOTEBot : na, "Bull OTE Bot", color = na)
+fill(bullOTETopPlot, bullOTEBotPlot, color = color.new(color.green, 85), title = "Bull OTE Zone")
+
+bearOTETopPlot = plot(bearOTEActive ? bearOTETop : na, "Bear OTE Top", color = na)
+bearOTEBotPlot = plot(bearOTEActive ? bearOTEBot : na, "Bear OTE Bot", color = na)
+fill(bearOTETopPlot, bearOTEBotPlot, color = color.new(color.red, 85), title = "Bear OTE Zone")
+
+plotshape(longEntry,  "Long OTE",  shape.labelup,   location.belowbar, color.green, text = "OTE Long",  size = size.small)
+plotshape(shortEntry, "Short OTE", shape.labeldown, location.abovebar, color.red,   text = "OTE Short", size = size.small)

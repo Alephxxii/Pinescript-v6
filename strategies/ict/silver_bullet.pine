@@ -1,0 +1,139 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0
+// © Alephxxii
+
+//@version=6
+strategy("ICT Silver Bullet Strategy", shorttitle="ICT SB",
+     overlay            = true,
+     initial_capital    = 10000,
+     default_qty_type   = strategy.percent_of_equity,
+     default_qty_value  = 5,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0.01)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DESCRIPTION
+// The ICT Silver Bullet is a high-probability setup that occurs during two
+// specific kill-zone windows (New York time):
+//   • 10:00 – 11:00  (AM session)
+//   • 14:00 – 15:00  (PM session / London Close)
+//
+// Entry logic:
+//   1. Wait for a Fair Value Gap (FVG) to form inside the kill-zone window.
+//   2. Enter on a retracement back into the FVG.
+//   3. Stop Loss below the FVG (long) or above the FVG (short).
+//   4. Take Profit at a previous swing high (long) or swing low (short).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INPUTS
+// ─────────────────────────────────────────────────────────────────────────────
+var string GRP_SESSION = "Kill-Zone Windows (New York Time)"
+var string GRP_RISK    = "Risk Management"
+var string GRP_FILTER  = "Filters"
+
+amStart  = input.session("1000-1100", "AM Kill-Zone  (10:00–11:00 NY)", group = GRP_SESSION)
+pmStart  = input.session("1400-1500", "PM Kill-Zone  (14:00–15:00 NY)", group = GRP_SESSION)
+
+rrRatio  = input.float(2.0, "Risk:Reward ratio (TP multiplier of SL)",
+             minval = 0.5, step = 0.5, group = GRP_RISK)
+slBuffer = input.float(0.1, "Stop Loss buffer below/above FVG (%)",
+             minval = 0.01, step = 0.05, group = GRP_RISK)
+
+trendFilter = input.bool(true, "Enable trend filter (EMA 200)", group = GRP_FILTER)
+emaLength   = input.int(200, "EMA length for trend filter", minval = 10, group = GRP_FILTER)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TIMEZONE + SESSION DETECTION
+// ─────────────────────────────────────────────────────────────────────────────
+inAMSession = not na(time(timeframe.period, amStart, "America/New_York"))
+inPMSession = not na(time(timeframe.period, pmStart, "America/New_York"))
+inKillZone  = inAMSession or inPMSession
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TREND FILTER (EMA 200)
+// ─────────────────────────────────────────────────────────────────────────────
+ema200 = ta.ema(close, emaLength)
+isBullTrend = close > ema200
+isBearTrend = close < ema200
+
+plot(trendFilter ? ema200 : na, "EMA 200", color = color.new(color.yellow, 40), linewidth = 2)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FVG DETECTION
+// ─────────────────────────────────────────────────────────────────────────────
+// Bullish FVG: low[0] > high[2]
+// Bearish FVG: high[0] < low[2]
+bullFVG = low > high[2]
+bearFVG = high < low[2]
+
+// FVG zones (formed 1 bar ago because we need bar[0] confirmed)
+var float bullFVGTop    = na
+var float bullFVGBottom = na
+var float bearFVGTop    = na
+var float bearFVGBottom = na
+
+// Track whether we've entered a trade since the FVG formed
+var bool bullFVGActive = false
+var bool bearFVGActive = false
+
+if barstate.isconfirmed and inKillZone
+    if bullFVG
+        bullFVGTop    := low          // top of the gap is candle[0].low
+        bullFVGBottom := high[2]      // bottom of the gap is candle[2].high
+        bullFVGActive := true
+    if bearFVG
+        bearFVGTop    := low[2]       // top of the gap is candle[2].low
+        bearFVGBottom := high         // bottom (actually it's inverted) = candle[0].high
+        bearFVGActive := true
+
+// Reset FVGs at start of each new kill-zone
+var bool prevInKillZone = false
+if inKillZone and not prevInKillZone
+    bullFVGActive := false
+    bearFVGActive := false
+prevInKillZone := inKillZone
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENTRY CONDITIONS
+// ─────────────────────────────────────────────────────────────────────────────
+// Long: price retraces into bullish FVG (closes inside the gap)
+longCondition  = bullFVGActive
+              and inKillZone
+              and close >= bullFVGBottom
+              and close <= bullFVGTop
+              and (not trendFilter or isBullTrend)
+              and strategy.position_size == 0
+
+// Short: price retraces into bearish FVG (closes inside the gap)
+shortCondition = bearFVGActive
+              and inKillZone
+              and close >= bearFVGBottom
+              and close <= bearFVGTop
+              and (not trendFilter or isBearTrend)
+              and strategy.position_size == 0
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EXECUTION
+// ─────────────────────────────────────────────────────────────────────────────
+if longCondition
+    slPrice = bullFVGBottom * (1 - slBuffer / 100)
+    tpPrice = close + (close - slPrice) * rrRatio
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long TP/SL", "Long", stop = slPrice, limit = tpPrice)
+    bullFVGActive := false
+
+if shortCondition
+    slPrice = bearFVGTop * (1 + slBuffer / 100)
+    tpPrice = close - (slPrice - close) * rrRatio
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short TP/SL", "Short", stop = slPrice, limit = tpPrice)
+    bearFVGActive := false
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VISUAL AIDS
+// ─────────────────────────────────────────────────────────────────────────────
+bgcolor(inAMSession ? color.new(color.blue,  92) : na, title = "AM Kill-Zone")
+bgcolor(inPMSession ? color.new(color.orange, 92) : na, title = "PM Kill-Zone")
+
+plotshape(longCondition,  "Long Entry",  style = shape.labelup,   location = location.belowbar, color = color.green, size = size.small, text = "SB Long")
+plotshape(shortCondition, "Short Entry", style = shape.labeldown, location = location.abovebar, color = color.red,   size = size.small, text = "SB Short")
